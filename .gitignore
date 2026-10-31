@@ -1,0 +1,19 @@
+# Large image binaries (distributed via GitHub Releases)
+*.img
+*.raw
+*.simg
+*.xz
+*.tar
+*.tar.md5
+*.zip
+!/collected_fixes/**/*.zip
+
+# Build outputs and temp files
+tmp/
+build/
+out/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+Thumbs.db

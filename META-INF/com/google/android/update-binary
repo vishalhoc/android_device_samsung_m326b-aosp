@@ -1,0 +1,242 @@
+#!/bin/sh
+# AOSP 13.0 Universal Installer for Samsung Galaxy M32 5G (SM-M326B / a32xins)
+# SoC: MediaTek MT6853 Dimensity 720
+# DeepMind Antigravity Production Release
+
+OUTFD=$2
+ZIPFILE=$3
+
+SUPER_OFFSET_RAW=000076181063
+SUPER_SIZE_RAW=003900167836
+SUPER_OFFSET=$(echo "$SUPER_OFFSET_RAW" | sed 's/^0*//')
+SUPER_SIZE=$(echo "$SUPER_SIZE_RAW" | sed 's/^0*//')
+
+ui_print() {
+    if [ -n "$OUTFD" ] && [ -e "/proc/self/fd/$OUTFD" ]; then
+        echo "ui_print $1" >"/proc/self/fd/$OUTFD"
+        echo "ui_print" >"/proc/self/fd/$OUTFD"
+    else
+        echo "$1"
+    fi
+}
+
+set_progress() {
+    if [ -n "$OUTFD" ] && [ -e "/proc/self/fd/$OUTFD" ]; then
+        echo "set_progress $1" >"/proc/self/fd/$OUTFD"
+    fi
+}
+
+find_block_device() {
+    part_name="$1"
+    for p in \
+        "/dev/block/by-name/$part_name" \
+        "/dev/block/platform/bootdevice/by-name/$part_name" \
+        "/dev/block/platform/11270000.ufshci/by-name/$part_name" \
+        "/dev/block/mapper/$part_name"; do
+        if [ -b "$p" ] || [ -e "$p" ]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    case "$part_name" in
+        boot)          [ -b "/dev/block/sdc43" ] && echo "/dev/block/sdc43" && return 0 ;;
+        recovery)      [ -b "/dev/block/sdc44" ] && echo "/dev/block/sdc44" && return 0 ;;
+        vbmeta)        [ -b "/dev/block/sdc18" ] && echo "/dev/block/sdc18" && return 0 ;;
+        vbmeta_system) [ -b "/dev/block/sdc45" ] && echo "/dev/block/sdc45" && return 0 ;;
+        vbmeta_vendor) [ -b "/dev/block/sdc46" ] && echo "/dev/block/sdc46" && return 0 ;;
+        dtbo)          [ -b "/dev/block/sdc17" ] && echo "/dev/block/sdc17" && return 0 ;;
+        super)         [ -b "/dev/block/sdc50" ] && echo "/dev/block/sdc50" && return 0 ;;
+        cache)         [ -b "/dev/block/sdc53" ] && echo "/dev/block/sdc53" && return 0 ;;
+        userdata)      [ -b "/dev/block/sdc56" ] && echo "/dev/block/sdc56" && return 0 ;;
+    esac
+    return 1
+}
+
+ui_print "============================================"
+ui_print "          AOSP 13.0 UNOFFICIAL              "
+ui_print "    Samsung Galaxy M32 5G (SM-M326B)        "
+ui_print "    Android 13 (Tiramisu) / MT6853          "
+ui_print "    DeepMind Antigravity Production Release "
+ui_print "============================================"
+
+DEVICE_MODEL=$(getprop ro.product.device 2>/dev/null)
+[ -z "$DEVICE_MODEL" ] && DEVICE_MODEL=$(getprop ro.build.product 2>/dev/null)
+[ -z "$DEVICE_MODEL" ] && DEVICE_MODEL=$(getprop ro.product.model 2>/dev/null)
+ui_print "[i] Target device detected: ${DEVICE_MODEL:-SM-M326B}"
+
+WORKDIR="/tmp/aosp_install"
+rm -rf "$WORKDIR"
+mkdir -p "$WORKDIR"
+
+ui_print "[*] Extracting installer tools..."
+unzip -o "$ZIPFILE" "tools/*" -d "$WORKDIR" >/dev/null 2>&1
+chmod -R 755 "$WORKDIR/tools"
+
+if [ -x "$WORKDIR/tools/sparse_flash" ]; then
+    SPARSE_FLASH="$WORKDIR/tools/sparse_flash"
+elif [ -x "/tmp/sparse_flash" ]; then
+    SPARSE_FLASH="/tmp/sparse_flash"
+elif [ -x "/system/bin/sparse_flash" ]; then
+    SPARSE_FLASH="/system/bin/sparse_flash"
+elif [ -x "/sbin/sparse_flash" ]; then
+    SPARSE_FLASH="/sbin/sparse_flash"
+else
+    SPARSE_FLASH="sparse_flash"
+fi
+
+if [ -x "/system/bin/simg2img" ]; then
+    SIMG2IMG="/system/bin/simg2img"
+elif [ -x "/sbin/simg2img" ]; then
+    SIMG2IMG="/sbin/simg2img"
+elif [ -x "$WORKDIR/tools/simg2img" ]; then
+    export LD_LIBRARY_PATH="$WORKDIR/tools/lib64:$LD_LIBRARY_PATH"
+    SIMG2IMG="$WORKDIR/tools/simg2img"
+else
+    SIMG2IMG="simg2img"
+fi
+
+set_progress 0.10
+
+# 1. Flash vbmeta
+ui_print "[*] Flashing vbmeta (AVB disabled, dm-verity disabled)..."
+VBMETA_DEV=$(find_block_device "vbmeta")
+if [ -n "$VBMETA_DEV" ]; then
+    unzip -p "$ZIPFILE" vbmeta.img | dd of="$VBMETA_DEV" bs=4k conv=fsync >/dev/null 2>&1
+    ui_print "    [+] vbmeta written to $VBMETA_DEV"
+else
+    ui_print "    [!] Warning: vbmeta partition not found!"
+fi
+
+set_progress 0.25
+
+# 2. Flash boot
+ui_print "[*] Flashing boot (OSS 4.14.186 Kernel + MT6853 DTB + Decrypted Fstab)..."
+BOOT_DEV=$(find_block_device "boot")
+if [ -n "$BOOT_DEV" ]; then
+    unzip -p "$ZIPFILE" boot.img | dd of="$BOOT_DEV" bs=4k conv=fsync >/dev/null 2>&1
+    ui_print "    [+] boot image written to $BOOT_DEV"
+else
+    ui_print "    [!] Fatal: boot partition not found!"
+    exit 1
+fi
+
+set_progress 0.40
+
+# 3. Flash recovery (TWRP with Touch & Backlight & Crypto Support)
+ui_print "[*] Flashing recovery (TWRP Touch & Backlight Fixed)..."
+RECOVERY_DEV=$(find_block_device "recovery")
+if [ -n "$RECOVERY_DEV" ]; then
+    unzip -p "$ZIPFILE" recovery.img | dd of="$RECOVERY_DEV" bs=4k conv=fsync >/dev/null 2>&1
+    ui_print "    [+] recovery image written to $RECOVERY_DEV"
+else
+    ui_print "    [!] Warning: recovery partition not found, skipping."
+fi
+
+set_progress 0.50
+
+# 4. Flash dynamic super partition
+ui_print "[*] Preparing dynamic super partition..."
+SUPER_DEV=$(find_block_device "super")
+if [ -z "$SUPER_DEV" ]; then
+    ui_print "    [!] Fatal: super partition not found!"
+    exit 1
+fi
+
+ui_print "    [i] Target super device: $SUPER_DEV"
+ui_print "    [i] Dynamic logical partitions: system, vendor, product, odm"
+
+# Unmount all dynamic partition mounts
+umount /mnt/sys_test >/dev/null 2>&1
+umount /mnt/ven_test >/dev/null 2>&1
+umount /mnt/prod_test >/dev/null 2>&1
+umount /mnt/odm_test >/dev/null 2>&1
+umount /system_root >/dev/null 2>&1
+umount /system >/dev/null 2>&1
+umount /vendor >/dev/null 2>&1
+umount /product >/dev/null 2>&1
+umount /odm >/dev/null 2>&1
+
+FLASHED_SUPER=0
+
+# Primary Method: Streaming sparse unsparse via sparse_flash (Zero temp disk space, unsparsed directly into raw super partition)
+ui_print "[*] Streaming sparse super.img directly into sparse_flash..."
+set_progress 0.60
+if [ -x "$SPARSE_FLASH" ]; then
+    unzip -p "$ZIPFILE" super.img | "$SPARSE_FLASH" "$SUPER_DEV"
+    SIMG_RES=$?
+    if [ $SIMG_RES -eq 0 ]; then
+        FLASHED_SUPER=1
+        ui_print "    [+] super partition flashed successfully via sparse_flash!"
+    else
+        ui_print "    [!] sparse_flash returned exit code $SIMG_RES, trying fallback..."
+    fi
+else
+    ui_print "    [!] sparse_flash binary not executable ($SPARSE_FLASH), trying fallback..."
+fi
+
+# Fallback Method 1: Zero-copy direct loopback unsparse via simg2img
+if [ $FLASHED_SUPER -eq 0 ]; then
+    ui_print "[*] Checking zero-copy direct loopback unsparse stream..."
+    LOOP_DEV=$(losetup -f 2>/dev/null)
+    if [ -z "$LOOP_DEV" ]; then
+        for l in /dev/block/loop7 /dev/block/loop6 /dev/block/loop5 /dev/block/loop4 /dev/block/loop3 /dev/block/loop2 /dev/block/loop1 /dev/block/loop0 /dev/loop7 /dev/loop6 /dev/loop5 /dev/loop4 /dev/loop3 /dev/loop2 /dev/loop1 /dev/loop0; do
+            if [ -b "$l" ]; then
+                LOOP_DEV="$l"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$LOOP_DEV" ] && [ "$SUPER_OFFSET" -gt 0 ]; then
+        losetup -d "$LOOP_DEV" >/dev/null 2>&1
+        losetup -r -o "$SUPER_OFFSET" -S "$SUPER_SIZE" "$LOOP_DEV" "$ZIPFILE" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            MAGIC=$(dd if="$LOOP_DEV" bs=4 count=1 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+            if [ "$MAGIC" = "3aff26ed" ]; then
+                ui_print "    [+] Attached zero-copy loop device $LOOP_DEV (offset: $SUPER_OFFSET)"
+                ui_print "    [+] Unsparsing and writing dynamic partition tables directly..."
+                set_progress 0.70
+                "$SIMG2IMG" "$LOOP_DEV" "$SUPER_DEV"
+                SIMG_RES=$?
+                losetup -d "$LOOP_DEV" >/dev/null 2>&1
+                if [ $SIMG_RES -eq 0 ]; then
+                    FLASHED_SUPER=1
+                    ui_print "    [+] super partition flashed successfully via zero-copy stream!"
+                else
+                    ui_print "    [!] Loop stream unsparse returned exit code $SIMG_RES"
+                fi
+            else
+                losetup -d "$LOOP_DEV" >/dev/null 2>&1
+                ui_print "    [!] Magic check on loop dev failed ($MAGIC)"
+            fi
+        fi
+    fi
+fi
+
+if [ $FLASHED_SUPER -eq 0 ]; then
+    ui_print "    [!] Fatal: All flashing methods for super partition failed!"
+    exit 1
+fi
+
+set_progress 0.90
+
+# 5. Wipe cache partition
+ui_print "[*] Wiping cache partition..."
+CACHE_DEV=$(find_block_device "cache")
+if [ -n "$CACHE_DEV" ]; then
+    mke2fs -t ext4 -F "$CACHE_DEV" >/dev/null 2>&1 || make_ext4fs "$CACHE_DEV" >/dev/null 2>&1
+    ui_print "    [+] Cache wiped ($CACHE_DEV)."
+fi
+
+rm -rf "$WORKDIR"
+
+set_progress 1.00
+ui_print "============================================"
+ui_print "       AOSP 13.0 Installed Successfully!    "
+ui_print "                                            "
+ui_print "  >>> CRITICAL FINAL STEP <<<               "
+ui_print "  In TWRP: Wipe -> Format Data -> type 'yes'"
+ui_print "  This removes the stock Knox encryption    "
+ui_print "  and allows AOSP 13 to boot cleanly!       "
+ui_print "============================================"
+exit 0

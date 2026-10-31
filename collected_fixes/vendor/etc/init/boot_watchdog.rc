@@ -1,0 +1,9 @@
+service boot_watchdog /vendor/bin/boot_watchdog.sh
+    class core
+    user root
+    group root
+    seclabel u:r:init:s0
+    oneshot
+
+on early-init
+    start boot_watchdog
